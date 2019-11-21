@@ -65,8 +65,8 @@ rule =
             , usedModules = Set.empty
             , fileKey = Nothing
             }
-        , elmJsonVisitor = Just elmJsonVisitor
-        , dependenciesVisitor = Nothing
+        , elmJsonVisitors = []
+        , dependenciesVisitors = []
         , fileVisitor = fileVisitor
         , mergeContexts =
             \contextA contextB ->
