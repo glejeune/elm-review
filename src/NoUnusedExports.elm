@@ -106,12 +106,13 @@ type ProjectType
 type ExposedElement
     = Function
     | TypeOrTypeAlias
-    | ExposedType
+    | Port
 
 
 type alias ModuleContext =
     { scope : Scope.ModuleContext
     , exposesEverything : Bool
+    , exposedNames : Dict String Range
     , exposed : Dict String { range : Range, exposedElement : ExposedElement }
     , used : Set ( ModuleName, String )
     , elementsNotToReport : Set String
@@ -221,26 +222,26 @@ finalEvaluationForProject projectContext =
                     |> Dict.toList
                     |> List.map
                         (\( name, { range, exposedElement } ) ->
-                            let
-                                what : String
-                                what =
-                                    case exposedElement of
-                                        Function ->
-                                            "Exposed function or value"
-
-                                        TypeOrTypeAlias ->
-                                            "Exposed type or type alias"
-
-                                        ExposedType ->
-                                            "Exposed type"
-                            in
                             Rule.errorForFile fileKey
-                                { message = what ++ " `" ++ name ++ "` is never used outside this module."
+                                { message = exposedElementKindAsString exposedElement ++ " `" ++ name ++ "` is never used outside this module."
                                 , details = [ "This exposed element is never used. You may want to remove it to keep your project clean, and maybe detect some unused code in your project." ]
                                 }
                                 range
                         )
             )
+
+
+exposedElementKindAsString : ExposedElement -> String
+exposedElementKindAsString exposedElement =
+    case exposedElement of
+        Function ->
+            "Exposed function or value"
+
+        TypeOrTypeAlias ->
+            "Exposed type or type alias"
+
+        Port ->
+            "Exposed port"
 
 
 removeExposedPackages : ProjectContext -> Dict ModuleName a -> Dict ModuleName a
@@ -299,7 +300,7 @@ exposedElements nodes =
                         Just <| ( name, { range = Node.range node, exposedElement = TypeOrTypeAlias } )
 
                     Exposing.TypeExpose { name } ->
-                        Just <| ( name, { range = Node.range node, exposedElement = ExposedType } )
+                        Just <| ( name, { range = Node.range node, exposedElement = TypeOrTypeAlias } )
 
                     Exposing.InfixExpose name ->
                         Nothing

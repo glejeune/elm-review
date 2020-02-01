@@ -69,6 +69,7 @@ all =
         , typeAliasesTests
 
         -- TODO Add tests that report exposing the type's variants if they are never used.
+        , portTests
         ]
 
 
@@ -563,4 +564,55 @@ type alias B = A.OtherType
                             ]
                           )
                         ]
+        ]
+
+
+portTests : Test
+portTests =
+    describe "Ports"
+        [ test "should report an unused incoming exposed port" <|
+            \() ->
+                """
+module A exposing (input)
+port input : (Json.Decode.Value -> msg) -> Sub msg
+"""
+                    |> Review.Test.runWithProjectData application rule
+                    |> Review.Test.expectErrors
+                        [ Review.Test.error
+                            { message = "Exposed port `input` is never used outside this module."
+                            , details = details
+                            , under = "input"
+                            }
+
+                        -- |> Review.Test.atExactly { start = { row = 2, column = 20 }, end = { row = 2, column = 27 } }
+                        ]
+        , test "should report an unused outgoing exposed port" <|
+            \() ->
+                """
+module A exposing (output)
+port output : Json.Encode.Value -> Cmd msg
+"""
+                    |> Review.Test.runWithProjectData application rule
+                    |> Review.Test.expectErrors
+                        [ Review.Test.error
+                            { message = "Exposed port `output` is never used outside this module."
+                            , details = details
+                            , under = "output"
+                            }
+
+                        -- |> Review.Test.atExactly { start = { row = 2, column = 20 }, end = { row = 2, column = 27 } }
+                        ]
+        , test "should not report a used port" <|
+            \() ->
+                [ """
+module A exposing (input, output)
+port input : (Json.Decode.Value -> msg) -> Sub msg
+port output : Json.Encode.Value -> Cmd msg
+""", """
+module B exposing (main)
+import A
+main = [ A.input, A.output ]
+""" ]
+                    |> Review.Test.runOnModulesWithProjectData application rule
+                    |> Review.Test.expectNoErrors
         ]
