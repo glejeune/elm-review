@@ -8,6 +8,7 @@ module Review.Rule exposing
     , ProjectRuleSchema, newProjectRuleSchema, fromProjectRuleSchema, withProjectElmJsonVisitor, withProjectDependenciesVisitor, withFinalProjectEvaluation, withContextFromImportedModules
     , Error, error, errorRuleName, errorMessage, errorDetails, errorRange, errorFixes, errorFilePath, ModuleKey, errorForFile, ElmJsonKey, errorForElmJson
     , withFixes
+    , notForPaths
     )
 
 {-| This module contains functions that are used for writing rules.
@@ -208,6 +209,13 @@ For more information on automatic fixing, read the documentation for [`Review.Fi
 
 @docs withFixes
 
+
+## Configuration and exceptions
+
+TODO Documentation.
+
+@docs notForPaths
+
 -}
 
 import Dict exposing (Dict)
@@ -233,7 +241,7 @@ TODO Link to "creating a module rule" and project rule instead
 See [`newModuleRuleSchema`](#newModuleRuleSchema), and [`newProjectRuleSchema`](#newProjectRuleSchema) for how to create one.
 -}
 type Rule
-    = Rule String (Project -> List (Graph.NodeContext ModuleName ()) -> ( List Error, Rule ))
+    = Rule String Configuration (Configuration -> Project -> List (Graph.NodeContext ModuleName ()) -> ( List Error, Rule ))
 
 
 {-| Represents a schema for a module [`Rule`](#Rule).
@@ -389,10 +397,10 @@ review rules project =
 runRules : List Rule -> Project -> List (Graph.NodeContext ModuleName ()) -> ( List Error, List Rule )
 runRules rules project nodeContexts =
     List.foldl
-        (\(Rule _ fn) ( errors, previousRules ) ->
+        (\(Rule _ configuration fn) ( errors, previousRules ) ->
             let
                 ( ruleErrors, ruleWithCache ) =
-                    fn project nodeContexts
+                    fn configuration project nodeContexts
             in
             ( List.concat [ ruleErrors, errors ], ruleWithCache :: previousRules )
         )
@@ -517,7 +525,7 @@ fromModuleRuleSchema ((ModuleRuleSchema { name }) as schema) =
     runModuleRule
         (reverseVisitors schema)
         newModuleRuleCache
-        |> Rule name
+        |> Rule name emptyConfiguration
 
 
 reverseVisitors : ModuleRuleSchema anything moduleContext -> ModuleRuleSchema anything moduleContext
@@ -554,8 +562,8 @@ newModuleRuleCache =
     }
 
 
-runModuleRule : ModuleRuleSchema { anything | hasAtLeastOneVisitor : () } moduleContext -> ModuleRuleCache moduleContext -> Project -> List (Graph.NodeContext ModuleName ()) -> ( List Error, Rule )
-runModuleRule ((ModuleRuleSchema schema) as moduleRuleSchema) previousCache project _ =
+runModuleRule : ModuleRuleSchema { anything | hasAtLeastOneVisitor : () } moduleContext -> ModuleRuleCache moduleContext -> Configuration -> Project -> List (Graph.NodeContext ModuleName ()) -> ( List Error, Rule )
+runModuleRule ((ModuleRuleSchema schema) as moduleRuleSchema) previousCache configuration project _ =
     let
         initialContext : moduleContext
         initialContext =
@@ -580,6 +588,12 @@ runModuleRule ((ModuleRuleSchema schema) as moduleRuleSchema) previousCache proj
         computeErrors_ =
             computeErrors moduleRuleSchema project initialContext
 
+        modulesToAnalyze : List ProjectModule
+        modulesToAnalyze =
+            project
+                |> Review.Project.modules
+                |> List.filter (\{ path } -> not <| Set.member path configuration.pathsNotToHandle)
+
         moduleResults : ModuleRuleResultCache
         moduleResults =
             List.foldl
@@ -597,7 +611,7 @@ runModuleRule ((ModuleRuleSchema schema) as moduleRuleSchema) previousCache proj
                                 Dict.insert module_.path { source = module_.source, errors = computeErrors_ module_ } cache
                 )
                 startCache.moduleResults
-                (Review.Project.modules project)
+                modulesToAnalyze
 
         errors : List Error
         errors =
@@ -609,7 +623,7 @@ runModuleRule ((ModuleRuleSchema schema) as moduleRuleSchema) previousCache proj
     , runModuleRule
         moduleRuleSchema
         { startCache | moduleResults = moduleResults }
-        |> Rule schema.name
+        |> Rule schema.name configuration
     )
 
 
@@ -722,6 +736,7 @@ newProjectRuleSchema name_ { moduleVisitorSchema, initProjectContext, fromProjec
 fromProjectRuleSchema : ProjectRuleSchema projectContext moduleContext -> Rule
 fromProjectRuleSchema (ProjectRuleSchema schema) =
     Rule schema.name
+        emptyConfiguration
         (runProjectRule
             (ProjectRuleSchema
                 { schema
@@ -803,8 +818,8 @@ type alias ProjectRuleCache projectContext =
         }
 
 
-runProjectRule : ProjectRuleSchema projectContext moduleContext -> ProjectRuleCache projectContext -> Project -> List (Graph.NodeContext ModuleName ()) -> ( List Error, Rule )
-runProjectRule ((ProjectRuleSchema schema) as wrappedSchema) startCache project nodeContexts =
+runProjectRule : ProjectRuleSchema projectContext moduleContext -> ProjectRuleCache projectContext -> Configuration -> Project -> List (Graph.NodeContext ModuleName ()) -> ( List Error, Rule )
+runProjectRule ((ProjectRuleSchema schema) as wrappedSchema) startCache configuration project nodeContexts =
     let
         graph : Graph ModuleName ()
         graph =
@@ -920,12 +935,13 @@ runProjectRule ((ProjectRuleSchema schema) as wrappedSchema) startCache project 
 
         errors : List Error
         errors =
-            List.concat
-                [ List.concatMap Tuple.first contextsAndErrorsPerFile
-                , errorsFromFinalEvaluationForProject wrappedSchema initialContext contextsAndErrorsPerFile
-                ]
+            [ List.concatMap Tuple.first contextsAndErrorsPerFile
+            , errorsFromFinalEvaluationForProject wrappedSchema initialContext contextsAndErrorsPerFile
+            ]
+                |> List.concat
+                |> List.filter (\(Error err) -> not <| Set.member err.filePath configuration.pathsNotToHandle)
     in
-    ( errors, Rule schema.name (runProjectRule wrappedSchema newCache) )
+    ( errors, Rule schema.name configuration (runProjectRule wrappedSchema newCache) )
 
 
 setRuleName : String -> Error -> Error
@@ -2084,6 +2100,29 @@ errorFixes (Error err) =
 errorFilePath : Error -> String
 errorFilePath (Error err) =
     err.filePath
+
+
+
+-- CONFIGURATION
+
+
+type alias Configuration =
+    { pathsNotToHandle : Set String
+    }
+
+
+emptyConfiguration : Configuration
+emptyConfiguration =
+    { pathsNotToHandle = Set.empty
+    }
+
+
+notForPaths : List String -> Rule -> Rule
+notForPaths paths (Rule name configuration fn) =
+    Rule
+        name
+        { configuration | pathsNotToHandle = Set.union (Set.fromList paths) configuration.pathsNotToHandle }
+        fn
 
 
 
